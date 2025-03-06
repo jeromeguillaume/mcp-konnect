@@ -1,0 +1,21 @@
+{
+  "name": "kong-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for querying Kong APIs",
+  "type": "module",
+  "main": "mcp-konnect-api.js",
+  "scripts": {
+    "start": "node mcp-konnect-api.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "dotenv": "^16.4.7",
+    "node-fetch": "^3.3.2",
+    "axios": "^1.6.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -2,10 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import axios from "axios";
-import * as dotenv from "dotenv";
-
-// Load environment variables from .env file
-dotenv.config();
 
 /**
  * Kong API Regions - Different geographical API endpoints 
@@ -20,9 +16,9 @@ const API_REGIONS = {
 };
 
 // Default to US region if not specified
-const API_REGION = process.env.KONG_API_REGION || API_REGIONS.US;
+const API_REGION = process.env.KONNECT_API_REGION || API_REGIONS.US;
 const BASE_URL = `https://${API_REGION}/v2`;
-const API_KEY = process.env.KONG_API_KEY || "";
+const API_KEY = process.env.KONNECT_API_KEY || "";
 
 if (!API_KEY) {
   console.error("Warning: KONG_API_KEY not set in environment. API calls will fail.");
@@ -133,7 +129,9 @@ function formatResponseTimes(data) {
 
 server.tool(
   "query-api-requests",
-  `Query and analyze Kong API Gateway requests with customizable filters.
+  `Query and analyze Kong API Gateway requests with customizable filters. 
+   Before calling this it's necessary to have a controlPlaneID and a serviceID or routeID. 
+   These can be obtained using the get-control-planes, list-services, and list-routes tools.
 
 INPUT:
   - timeRange: String - Time range for data retrieval (15M, 1H, 6H, 12H, 24H, 7D)
@@ -141,8 +139,8 @@ INPUT:
   - excludeStatusCodes: Number[] (optional) - Exclude specific HTTP status codes
   - httpMethods: String[] (optional) - Filter by HTTP methods (e.g., GET, POST)
   - consumerIds: String[] (optional) - Filter by consumer IDs
-  - serviceIds: String[] (optional) - Filter by service IDs. The format of this field must be "<controlPlaneID>:<serviceId>". 
-  - routeIds: String[] (optional) - Filter by route IDs. The format of this field must be "<controlPlaneID:routeId>"
+  - serviceIds: String[] (optional) - Filter by service IDs. The format of this field must be "<controlPlaneID>:<serviceID>". 
+  - routeIds: String[] (optional) - Filter by route IDs. The format of this field must be "<controlPlaneID:routeID>"
   - maxResults: Number - Maximum number of results to return (1-1000)
 
 OUTPUT:
@@ -191,7 +189,8 @@ OUTPUT:
       - contentLength: String - Content-Length header value
     - traceId: String - Distributed tracing ID
     - upstreamUri: String - URI sent to the upstream service
-    - upstreamStatus: String - Status code from upstream service`,
+    - upstreamStatus: String - Status code from upstream service
+    - recommendations: Array - Suggested next actions and related tools`,
   {
     timeRange: timeRangeSchema,
     statusCodes: z.array(z.number().int().min(100).max(599))
@@ -205,10 +204,10 @@ OUTPUT:
       .describe("Filter by HTTP methods (e.g. ['GET', 'POST', 'DELETE'])"),
     consumerIds: z.array(z.string())
       .optional()
-      .describe("Filter by consumer IDs (can be used with get-consumer-requests tool)"),
+      .describe("Filter by consumer IDs"),
     serviceIds: z.array(z.string())
       .optional()
-      .describe("Filter by service IDs (can be used with get-service-requests tool)"),
+      .describe("Filter by service IDs"),
     routeIds: z.array(z.string())
       .optional()
       .describe("Filter by route IDs (from list-routes tool)"),
@@ -376,7 +375,11 @@ OUTPUT:
           },
           traceId: req.trace_id,
           upstreamUri: req.upstream_uri,
-          upstreamStatus: req.upstream_status
+          upstreamStatus: req.upstream_status,
+          recommendations: [
+            "Use 'get-consumer-requests' tool with consumerId from top failing consumers for more details",
+            "Check 'query-api-requests' with specific status codes for deeper investigation"
+          ]
         }))
       };
 
@@ -394,195 +397,6 @@ OUTPUT:
           {
             type: "text",
             text: `Error querying API requests: ${error.message}\n\nTroubleshooting tips:\n1. Verify your API key is valid and has sufficient permissions\n2. Check that the time range and filter values are valid\n3. Ensure your network connection to the Kong API is working properly`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
-server.tool(
-  "analyze-failed-requests",
-  `Analyze failed API requests (non-2xx status codes) to identify patterns and common errors.
-
-INPUT:
-  - timeRange: String - Time range for data retrieval (15M, 1H, 6H, 12H, 24H, 7D)
-  - include4xx: Boolean - Whether to include 4xx client errors (default: true)
-  - include5xx: Boolean - Whether to include 5xx server errors (default: true)
-  - maxResults: Number - Maximum number of results to return (1-1000)
-
-OUTPUT:
-  - metadata: Object - Contains totalFailures, timeRange, and applied filters
-  - summary: Object - Statistical analysis of failures, including:
-    - byStatusCode: Array - Breakdown of failures by status code with counts and percentages
-    - byConsumer: Array - Top consumers with the most failures
-    - byService: Array - Top services with the most failures
-    - byHttpMethod: Array - Failures broken down by HTTP method
-  - recentFailures: Array - Sample of recent failed requests with details
-  - recommendations: Array - Suggested next actions and related tools`,
-  {
-    timeRange: timeRangeSchema,
-    include4xx: z.boolean()
-      .default(true)
-      .describe("Include 4xx client errors (e.g., 400 Bad Request, 401 Unauthorized, 404 Not Found)"),
-    include5xx: z.boolean()
-      .default(true)
-      .describe("Include 5xx server errors (e.g., 500 Internal Server Error, 502 Bad Gateway, 503 Service Unavailable)"),
-    maxResults: pageSizeSchema,
-  },
-  async ({ timeRange, include4xx, include5xx, maxResults }) => {
-    try {
-      // Build status code filter
-      const statusCodeFilter = {
-        field: "status_code_grouped",
-        operator: "in",
-        value: []
-      };
-
-      if (include4xx) {
-        statusCodeFilter.value.push("4XX");
-      }
-
-      if (include5xx) {
-        statusCodeFilter.value.push("5XX");
-      }
-
-      // Create request body
-      const requestBody = {
-        time_range: {
-          type: "relative",
-          time_range: timeRange
-        },
-        filters: [statusCodeFilter],
-        size: maxResults
-      };
-
-      // Make the API request
-      const result = await kongRequest("/api-requests", "POST", requestBody);
-
-      // Categorize failures and generate analysis
-      const failures = result.results;
-
-      // Group by status code
-      const byStatusCode = {};
-      failures.forEach(req => {
-        const status = req.status_code || req.response_http_status;
-        if (!byStatusCode[status]) {
-          byStatusCode[status] = [];
-        }
-        byStatusCode[status].push(req);
-      });
-
-      // Group by consumer
-      const byConsumer = {};
-      failures.forEach(req => {
-        const consumer = req.consumer || "anonymous";
-        if (!byConsumer[consumer]) {
-          byConsumer[consumer] = [];
-        }
-        byConsumer[consumer].push(req);
-      });
-
-      // Group by service
-      const byService = {};
-      failures.forEach(req => {
-        const service = req.gateway_service || "unknown";
-        if (!byService[service]) {
-          byService[service] = [];
-        }
-        byService[service].push(req);
-      });
-
-      // Group by HTTP method
-      const byMethod = {};
-      failures.forEach(req => {
-        const method = req.http_method || "unknown";
-        if (!byMethod[method]) {
-          byMethod[method] = [];
-        }
-        byMethod[method].push(req);
-      });
-
-      // Prepare analysis results with consistent structure
-      const analysis = {
-        metadata: {
-          totalFailures: failures.length,
-          timeRange: {
-            start: result.meta.time_range.start,
-            end: result.meta.time_range.end,
-          },
-          filters: {
-            include4xx,
-            include5xx
-          }
-        },
-        summary: {
-          byStatusCode: Object.entries(byStatusCode).map(([code, reqs]) => ({
-            statusCode: parseInt(code),
-            count: reqs.length,
-            percentage: parseFloat((reqs.length / failures.length * 100).toFixed(2)),
-            examples: reqs.slice(0, 3).map(req => req.request_uri)
-          })).sort((a, b) => b.count - a.count),
-          byConsumer: Object.entries(byConsumer)
-            .map(([id, reqs]) => ({
-              consumerId: id,
-              count: reqs.length,
-              percentage: parseFloat((reqs.length / failures.length * 100).toFixed(2)),
-              commonStatusCodes: Array.from(new Set(reqs.map(r => r.status_code || r.response_http_status)))
-            }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 5),
-          byService: Object.entries(byService)
-            .map(([id, reqs]) => ({
-              serviceId: id,
-              count: reqs.length,
-              percentage: parseFloat((reqs.length / failures.length * 100).toFixed(2)),
-              commonStatusCodes: Array.from(new Set(reqs.map(r => r.status_code || r.response_http_status)))
-            }))
-            .sort((a, b) => b.count - a.count)
-            .slice(0, 5),
-          byHttpMethod: Object.entries(byMethod)
-            .map(([method, reqs]) => ({
-              httpMethod: method,
-              count: reqs.length,
-              percentage: parseFloat((reqs.length / failures.length * 100).toFixed(2))
-            }))
-            .sort((a, b) => b.count - a.count)
-        },
-        recentFailures: failures.slice(0, 10).map(req => ({
-          timestamp: req.request_start,
-          httpMethod: req.http_method,
-          uri: req.request_uri,
-          statusCode: req.status_code || req.response_http_status,
-          consumerId: req.consumer,
-          serviceId: req.gateway_service,
-          latencyMs: req.latencies_response_ms,
-          routeId: req.route,
-          clientIp: req.client_ip,
-          traceId: req.trace_id
-        })),
-        recommendations: [
-          "Use 'get-consumer-requests' tool with consumerId from top failing consumers for more details",
-          "Use 'get-service-requests' tool with serviceId from top failing services for more details",
-          "Check 'query-api-requests' with specific status codes for deeper investigation"
-        ]
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(analysis, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error analyzing failed requests: ${error.message}\n\nTroubleshooting tips:\n1. Verify your API key is valid and has sufficient permissions\n2. Check that the time range selected contains data\n3. Ensure at least one of include4xx or include5xx is set to true`
           }
         ],
         isError: true
@@ -768,520 +582,9 @@ OUTPUT:
   }
 );
 
-server.tool(
-  "get-service-requests",
-  `Retrieve and analyze API requests handled by a specific service.
-
-INPUT:
-  - serviceId: String - ID of the service to analyze. The format of this field must be "<controlPlaneID>:<serviceId>".
-  - timeRange: String - Time range for data retrieval (15M, 1H, 6H, 12H, 24H, 7D)
-  - successOnly: Boolean - Filter to only show successful (2xx) requests (default: false)
-  - failureOnly: Boolean - Filter to only show failed (non-2xx) requests (default: false)
-  - maxResults: Number - Maximum number of results to return (1-1000)
-
-OUTPUT:
-  - metadata: Object - Contains serviceId, totalRequests, timeRange, and filters
-  - statistics: Object - Service usage statistics including:
-    - averageLatencyMs: Number - Average response time in milliseconds
-    - successRate: Number - Percentage of successful requests
-    - statusCodeDistribution: Array - Breakdown of requests by status code
-    - consumerDistribution: Array - Breakdown of top consumers using this service
-    - routeDistribution: Array - Breakdown of routes for this service
-  - requests: Array - List of requests with details for each request`,
-  {
-    serviceId: z.string()
-      .describe("Service ID to filter by (obtainable from analyze-failed-requests or list-services tools)"),
-    timeRange: timeRangeSchema,
-    successOnly: z.boolean()
-      .default(false)
-      .describe("Show only successful (2xx) requests"),
-    failureOnly: z.boolean()
-      .default(false)
-      .describe("Show only failed (non-2xx) requests"),
-    maxResults: pageSizeSchema,
-  },
-  async ({ serviceId, timeRange, successOnly, failureOnly, maxResults }) => {
-    try {
-      // Build filters array
-      const filters = [
-        {
-          field: "gateway_service",
-          operator: "in",
-          value: [serviceId]
-        }
-      ];
-
-      // Add status code filter if needed
-      if (successOnly) {
-        filters.push({
-          field: "status_code_grouped",
-          operator: "in",
-          value: ["2XX"]
-        });
-      } else if (failureOnly) {
-        filters.push({
-          field: "status_code_grouped",
-          operator: "in",
-          value: ["4XX", "5XX"]
-        });
-      }
-
-      // Create request body
-      const requestBody = {
-        time_range: {
-          type: "relative",
-          time_range: timeRange
-        },
-        filters: filters,
-        size: maxResults
-      };
-
-      // Make the API request
-      const result = await kongRequest("/api-requests", "POST", requestBody);
-      
-      // Calculate some statistics if we have results
-      let avgLatency = 0;
-      let successRate = 0;
-      let statusCodeCounts = {};
-      let consumerBreakdown = {};
-      let routeBreakdown = {};
-      
-      if (result.results.length > 0) {
-        // Calculate average latency
-        avgLatency = result.results.reduce((sum, req) => sum + (req.latencies_response_ms || 0), 0) / result.results.length;
-        
-        // Calculate success rate
-        const successCount = result.results.filter(req => {
-          const status = req.status_code || req.response_http_status;
-          return status >= 200 && status < 300;
-        }).length;
-        successRate = (successCount / result.results.length) * 100;
-        
-        // Count status codes
-        result.results.forEach(req => {
-          const status = req.status_code || req.response_http_status;
-          statusCodeCounts[status] = (statusCodeCounts[status] || 0) + 1;
-        });
-        
-        // Consumer breakdown
-        result.results.forEach(req => {
-          const consumer = req.consumer || "anonymous";
-          if (!consumerBreakdown[consumer]) {
-            consumerBreakdown[consumer] = { count: 0, statusCodes: {} };
-          }
-          consumerBreakdown[consumer].count++;
-          
-          const status = req.status_code || req.response_http_status;
-          consumerBreakdown[consumer].statusCodes[status] = (consumerBreakdown[consumer].statusCodes[status] || 0) + 1;
-        });
-        
-        // Route breakdown
-        result.results.forEach(req => {
-          const route = req.route || "unknown";
-          if (!routeBreakdown[route]) {
-            routeBreakdown[route] = { count: 0, statusCodes: {} };
-          }
-          routeBreakdown[route].count++;
-          
-          const status = req.status_code || req.response_http_status;
-          routeBreakdown[route].statusCodes[status] = (routeBreakdown[route].statusCodes[status] || 0) + 1;
-        });
-      }
-
-      // Format the response in a readable way
-      const formattedResponse = {
-        metadata: {
-          serviceId: serviceId,
-          totalRequests: result.results.length,
-          timeRange: {
-            start: result.meta.time_range.start,
-            end: result.meta.time_range.end,
-          },
-          filters: {
-            successOnly,
-            failureOnly
-          }
-        },
-        statistics: {
-          averageLatencyMs: parseFloat(avgLatency.toFixed(2)),
-          successRate: parseFloat(successRate.toFixed(2)),
-          statusCodeDistribution: Object.entries(statusCodeCounts).map(([code, count]) => ({
-            statusCode: parseInt(code),
-            count: count,
-            percentage: parseFloat(((count / result.results.length) * 100).toFixed(2))
-          })).sort((a, b) => b.count - a.count),
-          consumerDistribution: Object.entries(consumerBreakdown).map(([consumer, data]) => ({
-            consumerId: consumer,
-            count: data.count,
-            percentage: parseFloat(((data.count / result.results.length) * 100).toFixed(2)),
-            statusCodeBreakdown: Object.entries(data.statusCodes).map(([code, count]) => ({
-              statusCode: parseInt(code),
-              count: count
-            })).sort((a, b) => b.count - a.count)
-          })).sort((a, b) => b.count - a.count),
-          routeDistribution: Object.entries(routeBreakdown).map(([route, data]) => ({
-            routeId: route,
-            count: data.count,
-            percentage: parseFloat(((data.count / result.results.length) * 100).toFixed(2)),
-            statusCodeBreakdown: Object.entries(data.statusCodes).map(([code, count]) => ({
-              statusCode: parseInt(code),
-              count: count
-            })).sort((a, b) => b.count - a.count)
-          })).sort((a, b) => b.count - a.count)
-        },
-        requests: result.results.map(req => ({
-          timestamp: req.request_start,
-          httpMethod: req.http_method,
-          uri: req.request_uri,
-          statusCode: req.status_code || req.response_http_status,
-          consumerId: req.consumer,
-          routeId: req.route,
-          latency: {
-            totalMs: req.latencies_response_ms,
-            gatewayMs: req.latencies_kong_gateway_ms,
-            upstreamMs: req.latencies_upstream_ms
-          },
-          clientIp: req.client_ip,
-          traceId: req.trace_id
-        }))
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error fetching service requests: ${error.message}\n\nTroubleshooting tips:\n1. Verify the serviceId is valid and exists in your Kong environment\n2. Check that the service has received requests within the specified time range\n3. Ensure you're not using both successOnly and failureOnly parameters together`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
 // =========================
 // Control Planes Configuration Tools
 // =========================
-
-server.tool(
-  "list-data-plane-nodes",
-  `List all data plane nodes associated with a control plane.
-
-INPUT:
-  - controlPlaneId: String - ID of the control plane
-  - pageSize: Number - Number of nodes to return per page (1-1000, default: 10)
-
-OUTPUT:
-  - metadata: Object - Contains controlPlaneId, pageSize, and totalCount
-  - nodes: Array - List of data plane nodes with details for each including:
-    - nodeId: String - Unique identifier for the node
-    - name: String - Display name of the node
-    - hostname: String - Host where the node is running
-    - type: String - Node type
-    - version: String - Kong Gateway version
-    - status: Object - Connection status information including:
-      - isConnected: Boolean - Whether node is currently connected
-      - lastSeen: String - Timestamp when node was last seen
-      - configHash: String - Current configuration hash on the node
-      - configHashMatch: Boolean - Whether config matches expected hash
-    - metadata: Object - Creation and update timestamps`,
-  {
-    controlPlaneId: z.string()
-      .describe("Control Plane ID (obtainable from list-control-planes tool)"),
-    pageSize: z.number().int()
-      .min(1).max(1000)
-      .default(10)
-      .describe("Number of nodes to return per page"),
-  },
-  async ({ controlPlaneId, pageSize }) => {
-    try {
-      const endpoint = `/control-planes/${controlPlaneId}/nodes?page[size]=${pageSize}`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names
-      const formattedResponse = {
-        metadata: {
-          controlPlaneId: controlPlaneId,
-          pageSize: pageSize,
-          totalCount: result.meta?.total_count || 0
-        },
-        nodes: result.data.map(node => ({
-          nodeId: node.id,
-          name: node.name,
-          hostname: node.hostname,
-          type: node.type,
-          version: node.version,
-          status: {
-            isConnected: node.status.connected,
-            lastSeen: node.status.last_seen,
-            configHash: node.status.config_hash,
-            configHashMatch: node.status.config_hash_match
-          },
-          metadata: {
-            createdAt: node.created_at,
-            updatedAt: node.updated_at
-          }
-        }))
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error listing data plane nodes: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the controlPlaneId is valid\n2. Check that your API key has permission to access this control plane\n3. Use list-control-planes tool first to get valid control plane IDs`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
-server.tool(
-  "list-eol-data-plane-nodes",
-  `List data plane nodes approaching End of Life (EOL).
-
-INPUT:
-  - controlPlaneId: String - ID of the control plane
-  - pageSize: Number - Number of nodes to return per page (1-1000, default: 10)
-
-OUTPUT:
-  - metadata: Object - Contains controlPlaneId, pageSize, and totalCount
-  - eolNodes: Array - List of nodes approaching EOL with details including:
-    - nodeId: String - Unique identifier for the node
-    - name: String - Display name of the node
-    - hostname: String - Host where the node is running
-    - version: String - Current Kong Gateway version
-    - status: Object - Connection status information
-    - eolInfo: Object - End of life information including:
-      - eolDate: String - Date when version reaches end of life
-      - daysRemaining: Number - Days until EOL
-      - recommendedVersion: String - Version to upgrade to
-    - metadata: Object - Creation and update timestamps
-  - recommendations: Array - Suggested actions for EOL nodes`,
-  {
-    controlPlaneId: z.string()
-      .describe("Control Plane ID (obtainable from list-control-planes tool)"),
-    pageSize: z.number().int()
-      .min(1).max(1000)
-      .default(10)
-      .describe("Number of nodes to return per page"),
-  },
-  async ({ controlPlaneId, pageSize }) => {
-    try {
-      const endpoint = `/control-planes/${controlPlaneId}/nodes/eol?page[size]=${pageSize}`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names
-      const formattedResponse = {
-        metadata: {
-          controlPlaneId: controlPlaneId,
-          pageSize: pageSize,
-          totalCount: result.meta?.total_count || 0
-        },
-        eolNodes: result.data.map(node => ({
-          nodeId: node.id,
-          name: node.name,
-          hostname: node.hostname,
-          type: node.type,
-          version: node.version,
-          status: {
-            isConnected: node.status.connected,
-            lastSeen: node.status.last_seen,
-            configHash: node.status.config_hash,
-            configHashMatch: node.status.config_hash_match
-          },
-          eolInfo: {
-            eolDate: node.eol_date,
-            daysRemaining: node.days_remaining,
-            recommendedVersion: node.recommended_version
-          },
-          metadata: {
-            createdAt: node.created_at,
-            updatedAt: node.updated_at
-          }
-        })),
-        recommendations: [
-          "Nodes approaching EOL should be upgraded to the recommended version",
-          "Use get-data-plane-node tool to get more detailed information about specific nodes",
-          "Plan upgrades in advance to avoid service disruptions"
-        ]
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error listing EOL data plane nodes: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the controlPlaneId is valid\n2. Check that your API key has permission to access this control plane\n3. If no nodes are returned, it might mean no nodes are approaching EOL`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
-server.tool(
-  "get-data-plane-node",
-  `Get detailed information about a specific data plane node.
-
-INPUT:
-  - controlPlaneId: String - ID of the control plane
-  - nodeId: String - ID of the node to retrieve
-
-OUTPUT:
-  - nodeDetails: Object - Detailed information about the node including:
-    - nodeId: String - Unique identifier for the node
-    - name: String - Display name of the node
-    - hostname: String - Host where the node is running
-    - type: String - Node type
-    - version: String - Kong Gateway version
-    - status: Object - Connection status information including:
-      - isConnected: Boolean - Whether node is currently connected
-      - lastSeen: String - Timestamp when node was last seen
-      - configHash: String - Current configuration hash on the node
-      - configHashMatch: Boolean - Whether config matches expected hash
-    - configuration: Object - Node-specific configuration options
-    - metadata: Object - Creation and update timestamps
-  - relatedTools: Array - List of related tools and actions`,
-  {
-    controlPlaneId: z.string()
-      .describe("Control Plane ID (obtainable from list-control-planes tool)"),
-    nodeId: z.string()
-      .describe("Node ID (obtainable from list-data-plane-nodes tool)"),
-  },
-  async ({ controlPlaneId, nodeId }) => {
-    try {
-      const endpoint = `/control-planes/${controlPlaneId}/nodes/${nodeId}`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names
-      const node = result.data;
-      const formattedResponse = {
-        nodeDetails: {
-          nodeId: node.id,
-          name: node.name,
-          hostname: node.hostname,
-          type: node.type,
-          version: node.version,
-          status: {
-            isConnected: node.status.connected,
-            lastSeen: node.status.last_seen,
-            configHash: node.status.config_hash,
-            configHashMatch: node.status.config_hash_match
-          },
-          configuration: node.config || {},
-          metadata: {
-            createdAt: node.created_at,
-            updatedAt: node.updated_at
-          }
-        },
-        relatedTools: [
-          "Use list-data-plane-nodes to see all nodes in this control plane",
-          "Use list-eol-data-plane-nodes to check if this node is approaching EOL",
-          "Use get-expected-config-hash to verify config synchronization"
-        ]
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting data plane node details: ${error.message}\n\nTroubleshooting tips:\n1. Verify that both the controlPlaneId and nodeId are valid\n2. Check that your API key has permission to access this control plane\n3. Use list-data-plane-nodes tool first to get valid node IDs`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
-server.tool(
-  "get-expected-config-hash",
-  `Get the expected configuration hash for a control plane.
-
-INPUT:
-  - controlPlaneId: String - ID of the control plane
-
-OUTPUT:
-  - controlPlaneId: String - ID of the control plane
-  - expectedConfigHash: String - The current expected configuration hash
-  - configGeneratedAt: String - Timestamp when the config was generated
-  - usage: String - Explanation of how to use this hash for verification`,
-  {
-    controlPlaneId: z.string()
-      .describe("Control Plane ID (obtainable from list-control-planes tool)"),
-  },
-  async ({ controlPlaneId }) => {
-    try {
-      const endpoint = `/control-planes/${controlPlaneId}/expected-config-hash`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names
-      const formattedResponse = {
-        controlPlaneId: controlPlaneId,
-        expectedConfigHash: result.data.expected_hash,
-        configGeneratedAt: result.data.generated_at,
-        usage: "Compare this hash with the config_hash field from data plane nodes to verify they have the latest configuration"
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting expected config hash: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the controlPlaneId is valid\n2. Check that your API key has permission to access this control plane\n3. Make sure the control plane has at least one configuration`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
 
 server.tool(
   "list-services",
@@ -1361,7 +664,6 @@ OUTPUT:
           }
         })),
         relatedTools: [
-          "Use get-service-requests to analyze traffic for a specific service",
           "Use list-routes to find routes that point to these services",
           "Use list-plugins to see plugins configured for these services"
         ]
@@ -1681,72 +983,6 @@ OUTPUT:
   }
 );
 
-server.tool(
-  "get-plugin-schema",
-  `Get the configuration schema for a specific plugin type.
-
-INPUT:
-  - controlPlaneId: String - ID of the control plane
-  - pluginName: String - Name of the plugin (e.g., rate-limiting, key-auth, cors)
-
-OUTPUT:
-  - pluginInfo: Object - Basic plugin information including:
-    - name: String - Name of the plugin
-    - controlPlaneId: String - ID of the control plane
-  - schema: Object - Plugin configuration schema including:
-    - fields: Object - Available configuration fields with types and defaults
-    - required: Array - List of required configuration fields
-    - type: String - Schema type (usually "object")
-  - usage: Object - Information about how to use this schema`,
-  {
-    controlPlaneId: z.string()
-      .describe("Control Plane ID (obtainable from list-control-planes tool)"),
-    pluginName: z.string()
-      .describe("Plugin name (e.g., 'rate-limiting', 'key-auth', 'cors')"),
-  },
-  async ({ controlPlaneId, pluginName }) => {
-    try {
-      const endpoint = `/control-planes/${controlPlaneId}/core-entities/schemas/plugins/${pluginName}`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names and simplify the schema
-      const formattedResponse = {
-        pluginInfo: {
-          name: pluginName,
-          controlPlaneId: controlPlaneId
-        },
-        schema: {
-          fields: result.fields || {},
-          required: Array.isArray(result.required) ? result.required : [],
-          type: result.type || "object"
-        },
-        usage: {
-          example: "This schema shows configuration options available when creating or updating this plugin type",
-          relatedTools: ["Use list-plugins to see existing plugins configured in your control plane"]
-        }
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting plugin schema: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the controlPlaneId is valid\n2. Check that the pluginName is correct and supported by your Kong installation\n3. Common plugin names are: rate-limiting, key-auth, basic-auth, oauth2, cors, jwt`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
 
 // =========================
 // Control Planes Tools
@@ -2131,83 +1367,6 @@ OUTPUT:
           {
             type: "text",
             text: `Error checking control plane group membership: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the controlPlaneId is valid\n2. Check that your API key has permission to access this control plane\n3. Use list-control-planes tool first to get valid control plane IDs`
-          }
-        ],
-        isError: true
-      };
-    }
-  }
-);
-
-server.tool(
-  "get-control-plane-group-status",
-  `Get the status of a control plane group, including any configuration conflicts.
-
-INPUT:
-  - groupId: String - ID of the control plane group (control plane that acts as the group)
-
-OUTPUT:
-  - groupId: String - ID of the control plane group that was checked
-  - status: String - Overall group status (OK, CONFLICT, etc.)
-  - message: String - Status message
-  - membershipCount: Object - Membership statistics including:
-    - total: Number - Total number of members in the group
-    - synced: Number - Number of members with synchronized configuration
-    - conflicted: Number - Number of members with configuration conflicts
-  - conflicts: Array - List of configuration conflicts with details for each:
-    - type: String - Conflict type
-    - entity: String - Entity type with conflict (service, route, etc.)
-    - entityId: String - ID of the entity with conflict
-    - reason: String - Explanation of the conflict
-    - affectedMembers: Array - List of members affected by this conflict
-  - recommendations: Array - Suggested actions to resolve conflicts`,
-  {
-    groupId: z.string()
-      .describe("Control plane group ID (the ID of the control plane that acts as the group)"),
-  },
-  async ({ groupId }) => {
-    try {
-      const endpoint = `/control-planes/${groupId}/group-status`;
-      const result = await kongRequest(endpoint);
-
-      // Transform the response to have consistent field names
-      const formattedResponse = {
-        groupId: groupId,
-        status: result.data.status,
-        message: result.data.message,
-        membershipCount: {
-          total: result.data.total_members,
-          synced: result.data.synced_members,
-          conflicted: result.data.conflicted_members
-        },
-        conflicts: result.data.conflicts.map(conflict => ({
-          type: conflict.type,
-          entity: conflict.entity,
-          entityId: conflict.entity_id,
-          reason: conflict.reason,
-          affectedMembers: conflict.affected_members || []
-        })),
-        recommendations: [
-          "Resolve configuration conflicts to ensure all members are properly synced",
-          "Use list-control-plane-group-memberships to see all members of this group",
-          "Check individual control planes with check-control-plane-group-membership"
-        ]
-      };
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(formattedResponse, null, 2)
-          }
-        ]
-      };
-    } catch (error) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Error getting control plane group status: ${error.message}\n\nTroubleshooting tips:\n1. Verify that the groupId is valid and refers to a control plane that acts as a group\n2. Check that your API key has permission to access this control plane group\n3. Use list-control-planes tool first to get valid control plane IDs`
           }
         ],
         isError: true

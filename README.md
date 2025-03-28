@@ -2,6 +2,10 @@
 
 A Model Context Protocol (MCP) server for interacting with Kong Konnect APIs, allowing AI assistants to query and analyze Kong Gateway configurations, traffic, and analytics.
 
+
+https://github.com/user-attachments/assets/19c2f716-49b5-46c3-9457-65b3784e2111
+
+
 ## Table of Contents
 - [Overview](#overview)
 - [Project Structure](#project-structure)

@@ -71,7 +71,7 @@ Set the following environment variables to configure the MCP server:
 
 ```bash
 # Required: Your Kong Konnect API key
-export KONNECT_ACCESS_TOKEN=your_api_key_here
+export KONNECT_ACCESS_TOKEN=kpat_api_key_here
 
 # Optional: The API region to use (defaults to US)
 # Possible values: US, EU, AU, ME, IN
@@ -212,10 +212,10 @@ To use this MCP server with Claude for Desktop:
     "kong-konnect": {
       "command": "node",
       "args": [
-        "/absolute/path/to/kong-konnect-mcp/build/index.js"
+        "/absolute/path/to/mcp-konnect/build/index.js"
       ],
       "env": {
-        "KONNECT_ACCESS_TOKEN": "your_api_key_here",
+        "KONNECT_ACCESS_TOKEN": "kpat_api_key_here",
         "KONNECT_REGION": "us"
       }
     }

@@ -7,6 +7,7 @@ https://github.com/user-attachments/assets/19c2f716-49b5-46c3-9457-65b3784e2111
 
 ## Table of Contents
 - [Overview](#overview)
+- [MCP Server Docker](#mcp-server-docker)
 - [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Configuration](#configuration)

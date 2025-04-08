@@ -1,12 +1,14 @@
 {
     "compilerOptions": {
+      //"module": "NodeNext",        // Updated from Node16
+      //"moduleResolution": "NodeNext", // Updated from Node16
+      "module": "ESNext",
       "target": "ES2022",
-      "module": "NodeNext",        // Updated from Node16
-      "moduleResolution": "NodeNext", // Updated from Node16
+      "esModuleInterop": true,
+      "moduleResolution": "node",
       "outDir": "./build",
       "rootDir": "./src",
       "strict": true,
-      "esModuleInterop": true,
       "skipLibCheck": true,
       "forceConsistentCasingInFileNames": true
     },

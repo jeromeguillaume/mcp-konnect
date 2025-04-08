@@ -15,6 +15,9 @@ class KongKonnectMcpServer extends McpServer {
 
   constructor(options: { apiKey?: string; apiRegion?: string } = {}) {
     super({
+      server: {
+        port: 6789
+      },
       name: "kong-konnect-mcp",
       version: "1.0.0",
       description: "Tools for managing and analyzing Kong Konnect API Gateway configurations and traffic"
@@ -184,13 +187,14 @@ async function main() {
   // Create server instance
   const server = new KongKonnectMcpServer({
     apiKey,
-    apiRegion
+    apiRegion,
   });
 
-  // Create transport and connect
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Kong Konnect MCP Server is running...");
+  
+  
+  console.log("Kong Konnect MCP Server is running...");
 }
 
 // Run the server

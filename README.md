@@ -2,7 +2,6 @@
 
 A Model Context Protocol (MCP) server for interacting with Kong Konnect APIs, allowing AI assistants to query and analyze Kong Gateway configurations, traffic, and analytics.
 
-
 https://github.com/user-attachments/assets/19c2f716-49b5-46c3-9457-65b3784e2111
 
 
@@ -31,6 +30,12 @@ Key features:
 - Integration with Claude and other MCP-compatible AI assistants
 
 Konnect MCP is a **work in progress** and we will be adding additional functionality and improvements with each release.
+
+## MCP Server Docker
+Build the Docker image for Konnect
+```sh
+./dockerBuild.sh
+```
 
 ## Project Structure
 
